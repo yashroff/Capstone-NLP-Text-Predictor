@@ -1,0 +1,262 @@
+---
+title: "capstone Milestone Report"
+author: "Yasneen Ashroff"
+date: "December 2, 2016"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library("rJava")
+library("NLP")
+library("openNLP")
+library("RWeka")
+library("tm")
+library(ggplot2)
+```
+
+# Summary
+
+This milestone report covers my progress to-date on the Johns Hopkins Data Science Capstone Project.
+
+The data has been downloaded and basic exploratory analysis has been performed. Analysis was done using the tm package using the RWeka tokenizer. I have done some statistical analysis on the frequency of terms, bi-grams and tri-grams, which will help in building a prediction model. 
+
+# Loading and pre-processing the data
+First we load each of the 3 input files (news, twitter and blogs), and then creating a sample file from each one. A subset containing 1% of each file will be used as a training dataset and the remainder will be the test set. Next we create and tokenize a sample of blog file. For this report I have only analyzed the blogs file, but the same steps can be repeated for all 3 files.
+
+```{r ,echo=FALSE}
+#function to create a sample of the blogs file
+createSampleSet <- function(inputFileName,outputFileName) {
+    #open and read the blogs file
+    setwd("C:/Users/Yasneen/rCoursera/en_US_samples")
+    con<-file(inputFileName)
+    
+    # create a sample set by taking every 100th row from the input set
+    inList<-readLines(con,skipNul=TRUE)
+    length<-length(inList)
+    lineNum<-1
+    blogs<-list()
+    if (file.exists(outputFileName)) file.remove(outputFileName)
+    
+    for (i in 1:length){
+        if (i %% 100 ==0){
+            blogs[lineNum]<-inList[i]
+            write(inList[i],file=outputFileName,append=TRUE)
+            lineNum<-lineNum+1
+        }
+    }
+}
+
+blogFileFull<-"C:\\Users\\Yasneen\\Google Drive\\coursera notes\\coursera notes\\JohnsHopkins\\capstone\\final\\en_US\\en_US.blogs.txt"
+sampleBlogFile<-"C:\\Users\\Yasneen\\rCoursera\\en_US_samples\\blogs_sample.txt"
+createSampleSet(blogFileFull,sampleBlogFile)
+
+#load and preprocess the files using tm package
+cname<-file.path("C:","Users","Yasneen","rCoursera","en_US_samples","blogs")
+blogs<-Corpus(DirSource(cname))
+```
+
+# Data Transformations
+In this section we will clean the data by removing punctuation, profanity, non-ASCII terms and converting all words to lowercase.
+To remove profanity we rely on Google's profanity word list. We use the removePunctuation function from the tm package, but since this does not remove certain punctuation such as dashes and angled double quotes, we remove those manually. The purpose of removing non-ASCII terms is to remove foreign words.
+
+When the data is cleaned, we create a DocumentTermMatrix and do some rudimentary analysis. 
+
+```{r , echo=TRUE, warning=FALSE}
+bad_words_con<-file("C:\\Users\\Yasneen\\rCoursera\\en_US_samples\\full-list-of-bad-words-banned-by-google-txt-file_2013_11_26_04_53_31_867.txt")
+bad_words_list<-readLines(bad_words_con,skipNul=TRUE)
+
+#Next we remove white space from profanity file
+trim <- function (x) gsub("^\\s+|\\s+$", "", x)
+bad_words_list<-trim(bad_words_list)
+```
+Profanity filtering function:
+```{r}
+profanityFilter <- content_transformer(function(w) {
+    for(i in 1:length(bad_words_list)){
+        w <-  gsub(trimws(bad_words_list[i]),"", w)
+    }
+    return(w)
+})
+
+blogs <- tm_map(blogs, profanityFilter)
+```
+Next we transform to lower case and remove punctuation.
+```{r}
+blogs <- tm_map(blogs,content_transformer(tolower))
+blogs <- tm_map(blogs,removePunctuation)
+```
+Now we remove non-standard punctuation by converting them to blanks: first create the toSpace content transformer
+```{r}
+toSpace <- content_transformer(function(x, pattern) {return (gsub(pattern, "", x))})
+
+blogs <- tm_map(blogs, toSpace, "'")
+blogs <- tm_map(blogs, toSpace, "'")
+blogs <- tm_map(blogs, toSpace, " -")
+
+```
+
+Remove non-ascii characters: while this won't remove foreign words, it will make them appear very low in the statistical ranking
+```{r}
+nonAscii<-content_transformer(function(x) {iconv(x, "latin1", "ASCII", sub="")})
+blogs <- tm_map(blogs, nonAscii)
+```                
+Create Document term matrix (DTM).
+
+```{r}
+dtm <- DocumentTermMatrix(blogs)
+freq <- colSums(as.matrix(dtm)) #frequency of each term
+```
+
+# Exploratory Data Analysis
+In this section we create graphs to analyze the dataset. We will explore:
+- how many unique terms are in the corpus?
+- what are the most common terms? If these are stopwords, should they be left in or stripped out? (in this analysis they will be left in)
+- how many terms account for 50% and 90% of the corpus?
+
+We then do a graph showing how many words are needed to cover 90% of the corpus. Less than 30% the terms account for 90% of the corpus.
+
+To find the number of  unique terms in the corpus:
+```{r}
+uniqueTerms<-length(freq) 
+uniqueTerms
+```
+```{r,echo=FALSE,warning=FALSE}
+#Write the cleaned records to a separate file
+writeLines(as.character(blogs[[1]]),file("C:\\Users\\Yasneen\\rCoursera\\en_US_samples\\blogs_cleaned.txt"))
+```
+# Exploratory Data Analysis of Single words
+How many total terms are in the corpus?
+```{r,warning=FALSE}
+totTerms<-sum(freq)
+totTerms
+```
+What are the most common terms? THE and AND are most common. We will leave these stopwords in the corpus, since we are predicting the next words to be typed.
+
+```{r,warning=FALSE}
+ord <- order(freq,decreasing=TRUE)
+freq[head(ord)]
+wf=data.frame(term=names(freq),occurrences=freq)
+wf<-wf[with(wf,order(-occurrences)),]
+#calculate cumulative sums of frequencies for each term
+wf$cumulativePct<-cumsum(wf$occurrences)*100/totTerms
+```
+Of all the terms, how many account for 50% of the corpus?
+
+```{r echo=FALSE,warning=FALSE}
+#function to count how many words make up x% of corpus
+percentageCounter <- function (pct,numUnique,numTot) {
+    totSum<-0
+    count<-0
+    for (i in 1:numUnique){
+        if (totSum < numTot*pct){
+            totSum<-totSum+freq[ord[i]]
+            count<-count+1
+        }
+    }
+    return (count)
+}
+
+percentageCounter(.5,uniqueTerms,totTerms)
+```
+A very small percentage account for 50% of the corpus. How many account for 90%?
+```{r,warning=FALSE, echo=FALSE}
+percentageCounter(.9,uniqueTerms,totTerms)
+```
+We can see that out of all the terms in the corpus, less than 30% the terms account for 90% of the corpus. Below the vertical lines show 50% and 90% respectively.
+
+```{r}
+p<-ggplot(data=wf, aes(x=seq(1,length(wf$term)), y=cumulativePct, group=1))  + geom_line() + geom_point()
+p<- p + xlab("# terms") +ylab ("percentage of corpus accounted for") +ggtitle("Coverage of dictionary")
+p<- p + geom_vline(xintercept = percentageCounter(.5,uniqueTerms,totTerms))
+p<- p + geom_vline(xintercept = percentageCounter(.9,uniqueTerms,totTerms))
+
+p
+```
+
+# Graph of frequency of terms
+Here are the words appearing more than 1000 times. We can see the stop words AND , THE appear the most.
+```{r}
+p1<-ggplot(data=subset(wf,occurrences>1000),aes(x=term,y=occurrences)) +geom_bar(stat="identity") + theme(axis.text.x=element_text(angle=45, hjust=1))
+p1<- p1 + xlab("term") +ylab ("number of occurrences") +ggtitle("Most frequently occurring words")
+p1
+```
+
+If we order them by most frequently occurring, we see that the curve is in line with Zipf's law.
+```{r,warning=FALSE}
+wf<-subset(wf,occurrences>1000)
+
+p<-ggplot(data=wf, aes(x=seq(1,length(wf$term)), y=occurrences, group=1)) +
+    geom_line() +
+    geom_point()
+p<- p + xlab("index of most frequently occurring words")  + ylab("# occurences of each word") +ggtitle("Counts of most frequently occurring words")
+p
+```
+
+# Exploratory Data Analysis: Bi-grams
+Create a bi-gram tokenizer
+```{r}
+BigramTokenizer <- function(x) NGramTokenizer(x, Weka_control(min = 2, max = 2)) # create 2-grams
+# create BiGram DTM
+BiDtm <- TermDocumentMatrix(blogs, control = list(tokenize = BigramTokenizer)) 
+BiDtmMatrix<-as.matrix(BiDtm)
+```
+Sort bi-grams by frequency. What are the most common? "OF THE", "IN THE"
+```{r}
+topBiGrams <- rowSums(BiDtmMatrix)
+topBiGrams<-sort(topBiGrams, decreasing = TRUE)
+BiWf=data.frame(term=names(topBiGrams),occurrences=topBiGrams)
+head(BiWf)
+```
+How many unique bi-grams are in the corpus?
+```{r}
+length(topBiGrams)
+```
+
+Graph of bi-gram frequencies, considering only those with more than 100 occurrences.
+```{r}
+BiWf<-subset(BiWf,occurrences>100)
+p<-ggplot(data=BiWf, aes(x=seq(1,length(BiWf$term)), y=occurrences, group=1)) +
+    geom_line() +
+    geom_point()
+p<- p + xlab("index of most frequently occurring bigrams")  + ylab("# occurences of each bigram") +ggtitle("Counts of most frequently occurring bigrams")
+p
+```
+
+# Exploratory Data Analysis: Tri-grams
+
+create tri-gram tokenizer and TriGram DTM. Sort tri-grams by frequency to identify common terms.
+```{r}
+TrigramTokenizer <- function(x) NGramTokenizer(x, Weka_control(min = 3, max = 3)) # create 3-grams
+
+TriDtm <- TermDocumentMatrix(blogs, control = list(tokenize = TrigramTokenizer)) 
+
+TriDtmMatrix<-as.matrix(TriDtm)
+topTriGrams <- rowSums(TriDtmMatrix)
+topTriGrams<-sort(topTriGrams, decreasing = TRUE)
+TriWf=data.frame(term=names(topTriGrams),occurrences=topTriGrams)
+head(TriWf)
+```
+How many unique tri-grams are in the corpus?
+```{r}
+length(topTriGrams)
+```
+
+Graph of Tri-gram frequencies, considering only those with >10 occurrences
+```{r,echo=FALSE}
+TriWf<-subset(TriWf,occurrences>10)
+p<-ggplot(data=TriWf, aes(x=seq(1,length(TriWf$term)), y=occurrences, group=1)) +
+    geom_line() +
+    geom_point()
+p<- p + xlab("index of most frequently occurring Trigrams")  + ylab("# occurences of each Trigram") +ggtitle("Counts of most frequently occurring Trigrams")
+p
+```
+We can see that Zipf's law holds for the single terms, bi-grams and tri-grams in this analysis.
+
+
+# Next Steps and Prediction algorithm
+The next steps will be:
+- create test datasets for the news and twitter feeds
+- build n-grams on all test datasets
+- build a prediction model using Markov Chains
+- investigate smoothing techniques to address terms we haven't seen before
