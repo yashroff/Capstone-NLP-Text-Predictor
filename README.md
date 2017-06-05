@@ -1,8 +1,12 @@
-Presentation
+Readme
 ========================================================
 author: Yasneen Ashroff
 date: Jan 5 2017
 autosize: true
+
+Presentation
+========================================================
+Please see the interim milestone presentation at http://rpubs.com/yashroff/Capstone and the final presentation at http://rpubs.com/yashroff/CapstonePresentation.
 
 Text Prediction Algorithm
 ========================================================
